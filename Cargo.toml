@@ -1,0 +1,25 @@
+[package]
+name = "near-epoch-indexer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0"
+clap = "2.33.3"
+diesel = { version = "1.4.8", features = ["postgres"] }
+dotenv = "0.15.0"
+futures = "0.3.17"
+actix-web = "3"
+actix-http = "2.2.1"
+http = "0.2.5"
+log = "0.4.14"
+serde = "1.0.130"
+serde_derive = "1.0.130"
+serde_json = "1.0.69"
+simple_logger = "1.13.0"
+tracing = "0.1.29"
+
+# 1.22.0-rc.4
+near-primitives = { git = "https://github.com/near/nearcore", rev="25b000ae4dd9fe784695d07a3f2e99d82a6f10bd" }

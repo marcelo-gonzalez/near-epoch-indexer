@@ -1,0 +1,9 @@
+
+* use the near-jsonrpc-client crate instead of handcoding that stuff.
+  It will be easier to use once a version containing
+  https://github.com/near/near-jsonrpc-client-rs/commit/471a53be062e0880c6bc5c2721d123da2a9e0c2e
+  is published
+
+* use sqlx instead of diesel-rs for database operations. Right now there's
+  a tradeoff between simplicity and this gitub issue: https://github.com/launchbadge/sqlx/issues/294
+  since we insert multiple records at once into the validator stats table

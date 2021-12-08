@@ -2,8 +2,11 @@ CREATE TABLE public.epochs (
     epoch_id text PRIMARY KEY,
     height integer NOT NULL,
     start_timestamp bigint UNIQUE NOT NULL,
-    end_timestamp bigint UNIQUE NOT NULL
+    end_timestamp bigint UNIQUE NOT NULL,
+    start_height bigint UNIQUE NOT NULL,
+    end_height bigint UNIQUE NOT NULL
     CHECK(start_timestamp < end_timestamp)
+    CHECK(start_height < end_height)
 );
 
 CREATE TABLE public.validator_stats (

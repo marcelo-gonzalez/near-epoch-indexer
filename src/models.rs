@@ -9,6 +9,8 @@ pub struct Epoch {
     pub height: i32,
     pub start_timestamp: i64,
     pub end_timestamp: i64,
+    pub start_height: i64,
+    pub end_height: i64,
 }
 
 impl Epoch {
@@ -18,6 +20,8 @@ impl Epoch {
             height: i32::try_from(epoch.info.epoch_height).unwrap_or(i32::MAX),
             start_timestamp: i64::try_from(epoch.first_block.header.timestamp).unwrap_or(i64::MAX),
             end_timestamp: i64::try_from(epoch.last_block.header.timestamp).unwrap_or(i64::MAX),
+            start_height: i64::try_from(epoch.first_block.header.height).unwrap_or(i64::MAX),
+            end_height: i64::try_from(epoch.last_block.header.height).unwrap_or(i64::MAX),
         }
     }
 }

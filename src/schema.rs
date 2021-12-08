@@ -4,6 +4,8 @@ table! {
         height -> Int4,
         start_timestamp -> Int8,
         end_timestamp -> Int8,
+        start_height -> Int8,
+        end_height -> Int8,
     }
 }
 

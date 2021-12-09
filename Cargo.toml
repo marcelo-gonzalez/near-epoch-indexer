@@ -12,7 +12,7 @@ diesel = { version = "1.4.8", features = ["postgres"] }
 dotenv = "0.15.0"
 futures = "0.3.17"
 actix-web = "3"
-actix-http = "2.2.1"
+actix-http = { version = "2.2.1", features = ["openssl"] }
 http = "0.2.5"
 log = "0.4.14"
 serde = "1.0.130"

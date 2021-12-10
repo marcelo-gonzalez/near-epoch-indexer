@@ -13,7 +13,8 @@ RUN cargo build --release
 
 FROM debian:buster
 RUN apt-get update -qq && apt-get install -y \
-    libpq-dev
+    libpq-dev \
+    ca-certificates
 COPY --from=build /app/target/release/near-epoch-indexer /app/near-epoch-indexer
 
 ENTRYPOINT ["/app/near-epoch-indexer"]

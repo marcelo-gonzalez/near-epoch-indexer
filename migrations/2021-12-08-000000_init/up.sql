@@ -3,6 +3,7 @@ CREATE TABLE public.epochs (
     height integer NOT NULL,
     start_timestamp bigint UNIQUE NOT NULL,
     end_timestamp bigint UNIQUE NOT NULL,
+    -- For convenience, the start height is the first actually present block
     start_height bigint UNIQUE NOT NULL,
     end_height bigint UNIQUE NOT NULL
     CHECK(start_timestamp < end_timestamp)

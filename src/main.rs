@@ -97,6 +97,7 @@ struct EpochIndexer {
     options: Options,
     db: PgConnection,
     client: Client,
+    earliest_block: Option<BlockHeight>,
     req_count: u32,
 }
 
@@ -125,6 +126,7 @@ impl EpochIndexer {
             options: options.clone(),
             db,
             client: Default::default(),
+            earliest_block: None,
             req_count: 0,
         }
     }
@@ -235,52 +237,69 @@ impl EpochIndexer {
             Ok(info) => info,
             Err(e) => return Err(e),
         };
-        let first_block = self.fetch_block_at_height(info.epoch_start_height).await?;
-        Ok(Some(EpochInfo {
-            id: last_block.header.epoch_id,
-            info,
-            first_block,
-            last_block,
-        }))
-    }
 
-    async fn fetch_and_index_prev_epoch(
-        &mut self,
-        epoch_ref: &EpochRef,
-        until: EpochHeight,
-    ) -> anyhow::Result<Option<EpochInfo>> {
-        if until >= epoch_ref.epoch_height - 1 {
-            return Ok(None);
+        let mut start_height = info.epoch_start_height;
+
+        if let Some(earliest) = self.earliest_block {
+            if start_height < earliest {
+                info!(
+                    "First block #{} of epoch #{} is earlier than the earliest \
+		     block {} knows about. Stopping...",
+                    start_height, info.epoch_height, self.options.rpc_url
+                );
+                return Ok(None);
+            }
         }
-        let epoch = match self.fetch_epoch(&epoch_ref.prev_last_block).await {
-            Ok(Some(info)) => info,
-            Ok(None) => return Ok(None),
-            Err(e) => return Err(e),
-        };
-        if until >= epoch.info.epoch_height {
-            return Ok(None);
+
+        while start_height < last_block.header.height {
+            match self.fetch_block_at_height(start_height).await {
+                Ok(first_block) => {
+                    return Ok(Some(EpochInfo {
+                        id: last_block.header.epoch_id,
+                        info,
+                        first_block,
+                        last_block,
+                    }));
+                }
+                Err(e) => {
+                    // this parsing stuff is required because the error code is a bit too broad.
+                    // We'll get -32000, which could be other kinds of errors
+                    match e.downcast_ref::<JSONRpcError>() {
+                        Some(JSONRpcError::RPC(rpc_error)) => match &rpc_error.data {
+                            Some(Value::String(msg)) => {
+                                if msg.starts_with("DB Not Found") {
+                                    info!(
+                                        "Block #{} doesn't seem to exist. Checking whether \
+					 epoch #{} really started at block #{}",
+                                        start_height,
+                                        info.epoch_height,
+                                        start_height + 1
+                                    );
+                                    start_height += 1;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                            _ => {
+                                return Err(e);
+                            }
+                        },
+                        _ => {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+            // There's already logic to limit QPS in backfill(),
+            // but let's still try not to spam in this tight loop
+            std::thread::sleep(Duration::from_millis(50));
         }
-        if epoch.info.epoch_height == epoch_ref.epoch_height {
-            warn!(
-                "Found an epoch height repeat! Epochs {} and {} both have height #{}. Skipping...",
-                epoch.id, epoch_ref.epoch_id, epoch_ref.epoch_height
-            );
-            return Ok(Some(epoch));
-        }
-        if epoch.info.epoch_height > epoch_ref.epoch_height {
-            warn!(
-                "Epoch height sequence is descending from {} -> {}! (height #{} -> #{}). Skipping...",
-                epoch.id, epoch_ref.epoch_id, epoch.info.epoch_height, epoch_ref.epoch_height);
-            return Ok(Some(epoch));
-        }
-        if epoch.info.epoch_height != epoch_ref.epoch_height - 1 {
-            warn!(
-                "Found a gap in epoch heights! No epoch between #{} and #{} found.",
-                epoch.info.epoch_height, epoch_ref.epoch_height
-            );
-        }
-        self.save_validator_info(&epoch)?;
-        Ok(Some(epoch))
+        return Err(anyhow!(
+            "Could not find any blocks in epoch #{} other than the last block #{}. \
+	     Something must be wrong...",
+            info.epoch_height,
+            last_block.header.height
+        ));
     }
 
     fn read_indexed_epochs(
@@ -340,12 +359,25 @@ impl EpochIndexer {
             .unwrap())
     }
 
+    // returns true if the RPC node we're querying can be expected to give earlier info.
+    // i.e. we haven't hit the earliest point in the chain that it knows about.
     async fn backfill(
         &mut self,
         start: EpochHeight,
         end: EpochHeight,
         end_first_block: BlockHeight,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
+        if let Some(earliest) = self.earliest_block {
+            if end_first_block < earliest {
+                info!(
+                    "First block #{} of epoch #{} is earlier than the earliest \
+		     block {} knows about. Stopping...",
+                    end_first_block, end, self.options.rpc_url
+                );
+                return Ok(false);
+            }
+        }
+
         let mut epoch_ref = match self.fetch_block_at_height(end_first_block).await {
             Ok(b) => EpochRef {
                 epoch_id: b.header.epoch_id,
@@ -359,31 +391,46 @@ impl EpochIndexer {
             let started_at = Instant::now();
             let start_req_count = self.req_count;
 
-            let epoch = self
-                .fetch_and_index_prev_epoch(&epoch_ref, start)
-                .await
-                .context(format!(
-                    "Failed to index epoch #{}",
-                    epoch_ref.epoch_height - 1
-                ))?;
-
-            match epoch {
-                Some(epoch) => {
-                    epoch_ref = EpochRef::from_info(&epoch);
-                    std::thread::sleep(til_next_request(
-                        self.options.backfill_qps,
-                        started_at,
-                        self.req_count - start_req_count,
-                    ));
-                }
-                None => {
-                    return Ok(());
-                }
+            if start >= epoch_ref.epoch_height - 1 {
+                return Ok(true);
+            }
+            let epoch = match self.fetch_epoch(&epoch_ref.prev_last_block).await {
+                Ok(Some(epoch)) => epoch,
+                Ok(None) => return Ok(false),
+                Err(e) => return Err(e),
             };
+            if epoch.info.epoch_height < epoch_ref.epoch_height {
+                if epoch.info.epoch_height != epoch_ref.epoch_height - 1 {
+                    warn!(
+                        "Found a gap in epoch heights! No epoch between #{} and #{} found.",
+                        epoch.info.epoch_height, epoch_ref.epoch_height
+                    );
+                }
+                if start < epoch.info.epoch_height {
+                    self.save_validator_info(&epoch)?;
+                } else {
+                    return Ok(true);
+                }
+            } else if epoch.info.epoch_height == epoch_ref.epoch_height {
+                warn!(
+                    "Found an epoch height repeat! Epochs {} and {} both have height #{}. Skipping...",
+                    epoch.id, epoch_ref.epoch_id, epoch_ref.epoch_height
+		);
+            } else {
+                warn!(
+                    "Epoch height sequence is descending from {} -> {}! (height #{} -> #{}). Skipping...",
+                    epoch.id, epoch_ref.epoch_id, epoch.info.epoch_height, epoch_ref.epoch_height);
+            }
+            std::thread::sleep(til_next_request(
+                self.options.backfill_qps,
+                started_at,
+                self.req_count - start_req_count,
+            ));
+            epoch_ref = EpochRef::from_info(&epoch);
         }
     }
 
-    async fn check_chain_id(&mut self) -> anyhow::Result<()> {
+    async fn fetch_status(&mut self) -> anyhow::Result<Value> {
         let mut res = match self
             .client
             .get(format!("{}/status", &self.options.rpc_url))
@@ -404,12 +451,15 @@ impl EpochIndexer {
             Err(e) => return Err(anyhow_from_actix(e)),
         };
         let response = res.body().await?;
-        let json = serde_json::from_slice::<Value>(&response).context(format!(
+        serde_json::from_slice::<Value>(&response).context(format!(
             "Parsing {}/status body:\n{}",
             &self.options.rpc_url,
             String::from_utf8_lossy(response.as_ref())
-        ))?;
-        match json.get("chain_id") {
+        ))
+    }
+
+    async fn check_chain_id(&self, status: &Value) -> anyhow::Result<()> {
+        match status.get("chain_id") {
             Some(id) => match id.as_str() {
                 Some(id) => {
                     if id == self.options.chain_id {
@@ -474,9 +524,14 @@ impl EpochIndexer {
                 } else {
                     self.backfill(height, latest, latest_start_height).await
                 };
-                if let Err(e) = result {
-                    error!("{:#}", e);
-                    return false;
+
+                match result {
+                    Ok(true) => {}
+                    Ok(false) => return false,
+                    Err(e) => {
+                        error!("{:#}", e);
+                        return false;
+                    }
                 }
                 *missing_rows -= smallest_indexed.0 - height - 1;
             }
@@ -499,9 +554,23 @@ impl EpochIndexer {
     }
 
     async fn run(&mut self) {
-        if let Err(e) = self.check_chain_id().await {
+        let status = match self.fetch_status().await {
+            Ok(status) => status,
+            Err(e) => {
+                error!("Error fetching RPC node status: {:#}", e);
+                return;
+            }
+        };
+        if let Err(e) = self.check_chain_id(&status).await {
             error!("Error checking chain ID: {}", e);
             return;
+        }
+        if let Some(sync_info) = status.get("sync_info") {
+            if let Some(Value::Number(height)) = sync_info.get("earliest_block_height") {
+                if let Some(height) = height.as_u64() {
+                    self.earliest_block = Some(height);
+                }
+            }
         }
 
         let latest_epoch = match self.get_latest_epoch_info().await {
@@ -560,7 +629,7 @@ impl EpochIndexer {
         if let Some(row) = last_row {
             let height = row.0;
             if height < latest_epoch.epoch_height - 1 {
-                if let Err(e) = self
+                match self
                     .backfill(
                         height,
                         latest_epoch.epoch_height,
@@ -568,9 +637,13 @@ impl EpochIndexer {
                     )
                     .await
                 {
-                    error!("{:#}", e);
-                    return;
-                }
+                    Ok(true) => {}
+                    Ok(false) => return,
+                    Err(e) => {
+                        error!("{:#}", e);
+                        return;
+                    }
+                };
 
                 missing_rows -= latest_epoch.epoch_height - height - 1;
                 if missing_rows == 0 {

@@ -166,7 +166,7 @@ impl EpochIndexer {
                 return Err(anyhow_from_actix(e));
             }
         };
-        let json = response.json::<JSONRpcResponse<T>>().await?;
+        let json = response.json::<JSONRpcResponse<T>>().limit(1 << 20).await?;
         match json.result {
             Some(result) => {
                 return Ok(result);

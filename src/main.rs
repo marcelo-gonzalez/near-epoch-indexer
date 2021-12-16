@@ -739,11 +739,21 @@ async fn main() {
     };
 
     dotenv::dotenv().ok();
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let mut indexer = EpochIndexer::new(
-        &options,
-        PgConnection::establish(&database_url)
-            .expect(&format!("Error connecting to {}", database_url)),
-    );
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(url) => url,
+        Err(_) => {
+            error!("The DATABASE_URL environment variable is not set.");
+            return;
+        }
+    };
+    let db = match PgConnection::establish(&database_url) {
+        Ok(db) => db,
+        Err(e) => {
+            error!("Error connecting to the database: {}", e);
+            return;
+        }
+    };
+
+    let mut indexer = EpochIndexer::new(&options, db);
     indexer.run().await;
 }

@@ -21,5 +21,5 @@ serde_json = "1.0.69"
 simple_logger = "1.13.0"
 tracing = "0.1.29"
 
-# 1.22.0-rc.4
-near-primitives = { git = "https://github.com/near/nearcore", rev="25b000ae4dd9fe784695d07a3f2e99d82a6f10bd" }
+# first commit containing chunk production stats
+near-primitives = { git = "https://github.com/near/nearcore", rev="6c3feafb27f40e8725b6e076f1fefda9fc42e371" }

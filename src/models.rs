@@ -32,6 +32,8 @@ pub struct ValidatorStat {
     pub epoch_id: String,
     pub num_produced_blocks: i32,
     pub num_expected_blocks: i32,
+    pub num_produced_chunks: i32,
+    pub num_expected_chunks: i32,
 }
 
 impl ValidatorStat {
@@ -41,6 +43,8 @@ impl ValidatorStat {
             epoch_id: epoch_id.to_string(),
             num_produced_blocks: i32::try_from(info.num_produced_blocks).unwrap_or(i32::MAX),
             num_expected_blocks: i32::try_from(info.num_expected_blocks).unwrap_or(i32::MAX),
+            num_produced_chunks: i32::try_from(info.num_produced_chunks).unwrap_or(i32::MAX),
+            num_expected_chunks: i32::try_from(info.num_expected_chunks).unwrap_or(i32::MAX),
         }
     }
 }

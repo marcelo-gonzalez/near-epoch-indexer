@@ -15,6 +15,8 @@ CREATE TABLE public.validator_stats (
     epoch_id text NOT NULL REFERENCES public.epochs (epoch_id) ON DELETE CASCADE,
     num_produced_blocks integer NOT NULL,
     num_expected_blocks integer NOT NULL,
+    num_produced_chunks integer NOT NULL,
+    num_expected_chunks integer NOT NULL,
     PRIMARY KEY (account_id, epoch_id)
 );
 

@@ -15,6 +15,8 @@ table! {
         epoch_id -> Text,
         num_produced_blocks -> Int4,
         num_expected_blocks -> Int4,
+        num_produced_chunks -> Int4,
+        num_expected_chunks -> Int4,
     }
 }
 

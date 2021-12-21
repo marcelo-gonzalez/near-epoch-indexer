@@ -11,9 +11,11 @@ We need the `diesel-cli` tool to create and manage the tables involved.
 $ cargo install diesel_cli --no-default-features --features "postgres"
 ```
 
-Apply migrations...
+Assuming you have postgres installed, run:
 
 ```bash
+$ createdb epochs-testnet
+$ echo DATABASE_URL=postgresql://yourname:password@localhost/epochs-testnet >> .env
 $ diesel migration run
 ```
 
@@ -23,8 +25,7 @@ $ sudo apt update && sudo apt-get install libpq-dev
 $ cargo build --release
 ```
 
-Run it with the `DATABASE_URL` environment variable set or listed in the file `./.env`
+Run it with the `DATABASE_URL` environment variable set or listed in the file `./.env` as above.
 ```bash
-$ echo "DATABASE_URL=postgres://user:password@host/db_name" > .env
 $ ./target/release/near-epoch-indexer --rpc-url http://localhost:3030 --chain-id testnet
 ```

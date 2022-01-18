@@ -142,6 +142,7 @@ impl EpochIndexer {
             .client
             .post(&self.options.rpc_url)
             .header("User-Agent", "near-validator-indexer")
+            .timeout(Duration::from_secs(30))
             .send_json(&json!({
                 "jsonrpc": "2.0",
                 "method": method,

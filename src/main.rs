@@ -3,7 +3,7 @@ use anyhow::{anyhow, Context};
 use clap::{value_t, App, Arg};
 use diesel::pg::PgConnection;
 use http::StatusCode;
-use log::{error, info, warn};
+use log::{info, warn};
 use near_primitives::hash::CryptoHash;
 use near_primitives::types::{BlockHeight, EpochHeight};
 use near_primitives::views::{BlockView, EpochValidatorInfo};
@@ -496,22 +496,22 @@ impl EpochIndexer {
         missing_rows: &mut u64,
         latest: EpochHeight,
         latest_start_height: BlockHeight,
-    ) -> bool {
+    ) -> anyhow::Result<bool> {
         for row in rows.iter() {
             let height = row.0;
 
             // the height == 1 check should not be needed since we check missing_rows,
             // but keep it as a paranoid check
             if height == 1 || *missing_rows == 0 {
-                return false;
+                return Ok(false);
             }
 
             if height >= smallest_indexed.0 {
-                error!(
+                return Err(anyhow!(
                     "epochs query with \"ORDER BY height DESC\" not strictly descending: {} -> {}",
-                    smallest_indexed.0, height
-                );
-                return false;
+                    smallest_indexed.0,
+                    height
+                ));
             }
             if height >= latest {
                 *missing_rows -= smallest_indexed.0 - height - 1;
@@ -528,11 +528,8 @@ impl EpochIndexer {
 
                 match result {
                     Ok(true) => {}
-                    Ok(false) => return false,
-                    Err(e) => {
-                        error!("{:#}", e);
-                        return false;
-                    }
+                    Ok(false) => return Ok(false),
+                    Err(e) => return Err(e),
                 }
                 *missing_rows -= smallest_indexed.0 - height - 1;
             }
@@ -545,27 +542,24 @@ impl EpochIndexer {
             } else {
                 self.backfill(0, latest, latest_start_height).await
             };
-            if let Err(e) = result {
-                error!("{:#}", e);
+            match result {
+                Ok(_) => Ok(false),
+                Err(e) => Err(e),
             }
-            false
         } else {
-            true
+            Ok(true)
         }
     }
 
-    async fn run(&mut self) {
-        let status = match self.fetch_status().await {
-            Ok(status) => status,
-            Err(e) => {
-                error!("Error fetching RPC node status: {:#}", e);
-                return;
-            }
-        };
-        if let Err(e) = self.check_chain_id(&status).await {
-            error!("Error checking chain ID: {}", e);
-            return;
-        }
+    async fn run(&mut self) -> anyhow::Result<()> {
+        let status = self
+            .fetch_status()
+            .await
+            .context("failed to fetch RPC node status")?;
+        self.check_chain_id(&status)
+            .await
+            .context("chain ID check failed")?;
+
         if let Some(sync_info) = status.get("sync_info") {
             if let Some(Value::Number(height)) = sync_info.get("earliest_block_height") {
                 if let Some(height) = height.as_u64() {
@@ -574,27 +568,20 @@ impl EpochIndexer {
             }
         }
 
-        let latest_epoch = match self.get_latest_epoch_info().await {
-            Ok(info) => info,
-            Err(e) => {
-                error!("Error getting validator info: {}", e);
-                return;
-            }
-        };
-        let num_rows = match self.read_num_epochs_indexed() {
-            Ok(n) => n,
-            Err(e) => {
-                error!("Error reading num rows from the database: {}", e);
-                return;
-            }
-        };
-        let last_row = match self.read_indexed_epochs(None, 1) {
-            Ok(rows) => rows.first().copied(),
-            Err(e) => {
-                error!("Error querying the database: {:#}", e);
-                return;
-            }
-        };
+        let latest_epoch = self
+            .get_latest_epoch_info()
+            .await
+            .context("failed fetching validator info")?;
+        let num_rows = self
+            .read_num_epochs_indexed()
+            .context("failed reading num rows from the database")?;
+
+        let last_row = self
+            .read_indexed_epochs(None, 1)
+            .context("failed querying the database")?
+            .first()
+            .copied();
+
         let last_indexed = match last_row {
             Some(row) => row.0,
             None => 0,
@@ -622,7 +609,7 @@ impl EpochIndexer {
                 "The latest completed epoch #{} has already been saved. Nothing to do.",
                 last_indexed
             );
-            return;
+            return Ok(());
         }
 
         let mut smallest_indexed;
@@ -639,16 +626,13 @@ impl EpochIndexer {
                     .await
                 {
                     Ok(true) => {}
-                    Ok(false) => return,
-                    Err(e) => {
-                        error!("{:#}", e);
-                        return;
-                    }
+                    Ok(false) => return Ok(()),
+                    Err(e) => return Err(e),
                 };
 
                 missing_rows -= latest_epoch.epoch_height - height - 1;
                 if missing_rows == 0 {
-                    return;
+                    return Ok(());
                 }
             } else if height >= latest_epoch.epoch_height {
                 warn!(
@@ -659,32 +643,28 @@ impl EpochIndexer {
             }
             smallest_indexed = row;
         } else {
-            if let Err(e) = self
+            return self
                 .backfill(
                     0,
                     latest_epoch.epoch_height,
                     latest_epoch.epoch_start_height,
                 )
                 .await
-            {
-                error!("{:#}", e);
-            }
-            return;
+                .map(|_| ());
         }
 
         loop {
             let limit = 100;
-            let heights = match self.read_indexed_epochs(Some(smallest_indexed.0), limit) {
-                Ok(heights) => heights,
-                Err(e) => {
-                    error!(
-                        "Error querying database for epochs earlier than #{}: {:#}",
-                        smallest_indexed.0, e
-                    );
-                    return;
-                }
-            };
-            if !self
+            let heights = self
+                .read_indexed_epochs(Some(smallest_indexed.0), limit)
+                .with_context(|| {
+                    format!(
+                        "failed querying database for epochs earlier than #{}",
+                        smallest_indexed.0
+                    )
+                })?;
+
+            match self
                 .index_missing_rows(
                     &heights,
                     limit,
@@ -694,15 +674,18 @@ impl EpochIndexer {
                     latest_epoch.epoch_start_height,
                 )
                 .await
+                .with_context(|| format!("failed indexing missing rows in the database"))
             {
-                return;
+                Ok(true) => (),
+                Ok(false) => return Ok(()),
+                Err(e) => return Err(e),
             };
         }
     }
 }
 
 #[actix_web::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Info)
         .env()
@@ -743,18 +726,16 @@ async fn main() {
     let database_url = match std::env::var("DATABASE_URL") {
         Ok(url) => url,
         Err(_) => {
-            error!("The DATABASE_URL environment variable is not set.");
-            return;
+            return Err(anyhow!("The DATABASE_URL environment variable is not set."));
         }
     };
     let db = match PgConnection::establish(&database_url) {
         Ok(db) => db,
         Err(e) => {
-            error!("Error connecting to the database: {}", e);
-            return;
+            return Err(e.into());
         }
     };
 
     let mut indexer = EpochIndexer::new(&options, db);
-    indexer.run().await;
+    indexer.run().await
 }

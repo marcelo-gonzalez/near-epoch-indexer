@@ -6,12 +6,12 @@ usage() {
 	    validators.sh [options] <account ID>
 
 	    Displays block/chunk production stats for the given validator ID. The script
-	    expects the MAINNET_EPOCHS_DATABASE_URL and TESTNET_EPOCHS_DATABASE_URL environment
-	    variables to be set.
+	    expects the MAINNET_EPOCHS_DATABASE_URL, TESTNET_EPOCHS_DATABASE_URL
+	    and BETANET_EPOCHS_DATABASE_URL environment variables to be set.
 
 	    Options:
 
-	    -c <chain_id>: possible values are "testnet" or "mainnet". Default "mainnet"
+	    -c <chain_id>: possible values are "mainnet", "testnet" or "betanet". Default "mainnet"
 	    -f <timestamp>: f as in "from". Results will only include epochs that ended
 	       		    at or after this timestamp
 	    -t <timestamp>: t as in "to". Results will only include epochs that began
@@ -39,6 +39,12 @@ show_stats() {
             exit 1
         fi
         url=$TESTNET_EPOCHS_DATABASE_URL
+    elif [ "$chain_id" = "betanet" ]; then
+        if [ -z "$BETANET_EPOCHS_DATABASE_URL" ]; then
+            echo "please set the BETANET_EPOCHS_DATABASE_URL environment variable"
+            exit 1
+        fi
+        url=$BETANET_EPOCHS_DATABASE_URL
     else
         usage 1
     fi
